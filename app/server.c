@@ -61,7 +61,7 @@ int main() {
 
 	char* ok_response = "HTTP/1.1 200 OK\r\n\r\n";
 
-	send(fd, ok_response, sizeof(ok_response), 0);	
+	send(fd, ok_response, strlen(ok_response), 0);	
 
 	printf("Client connected\n");
 	
