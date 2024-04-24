@@ -64,10 +64,6 @@ int main() {
 		printf("Could not accept connection from client.\n");
 		return 1;
 	}
-
-	char* ok_response = "HTTP/1.1 200 OK\r\n\r\n";
-
-	send_ok_response(fd);
 	
 
 	printf("Client connected\n");
@@ -83,7 +79,6 @@ int main() {
 	}
 
 	char* url = extract_req_url(buffer);
-	printf("url : %s", url);
 
 	if (strcmp(url, "/") == 0)
 	{
