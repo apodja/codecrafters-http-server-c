@@ -78,6 +78,7 @@ int main() {
 		return 1;
 	}
 
+    buffer[bytes] = '\0';
 	char* url = extract_req_url(buffer);
 
 	if (strcmp(url, "/") == 0)
@@ -106,10 +107,9 @@ void send_not_found_response(int fd) {
 char* extract_req_url(char* buffer) {
 	const char* delimiter = " ";
 	char* token;
-	strcpy(token, buffer);
 
 	// First token = request type GET, POST etc
-	token = strtok(token, delimiter);
+	token = strtok(buffer, delimiter);
 
 	// 2nd Token = Url
 	token = strtok(NULL, delimiter);
