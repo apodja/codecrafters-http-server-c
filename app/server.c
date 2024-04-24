@@ -83,6 +83,7 @@ int main() {
 	}
 
 	char* url = extract_req_url(buffer);
+	printf("url : %s", url);
 
 	if (strcmp(url, "/") == 0)
 	{
