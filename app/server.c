@@ -7,6 +7,12 @@
 #include <errno.h>
 #include <unistd.h>
 
+void send_ok_response(int fd);
+void send_not_found_response(int fd);
+char* extract_req_url(char* buffer);
+
+#define BUFFER_LENGTH 1024
+
 int main() {
 	// Disable output buffering
 	setbuf(stdout, NULL);
@@ -61,11 +67,56 @@ int main() {
 
 	char* ok_response = "HTTP/1.1 200 OK\r\n\r\n";
 
-	send(fd, ok_response, strlen(ok_response), 0);	
+	send_ok_response(fd);
+	
 
 	printf("Client connected\n");
+
+	char buffer[BUFFER_LENGTH];
+
+	int bytes = recv(fd, buffer, BUFFER_LENGTH, 0);
+
+	if (bytes == -1)
+	{
+		printf("Recieving bytes error.\n");
+		return 1;
+	}
+
+	char* url = extract_req_url(buffer);
+
+	if (strcmp(url, "/") == 0)
+	{
+		send_ok_response(fd);
+	} else {
+		send_not_found_response(fd);
+	}
 	
 	close(server_fd);
 
 	return 0;
+}
+
+void send_ok_response(int fd) {
+	const char* ok_response = "HTTP/1.1 200 OK\r\n\r\n";
+	send(fd, ok_response, strlen(ok_response), 0);	
+}
+
+void send_not_found_response(int fd) {
+	const char* not_found_response = "HTTP/1.1 404 NOT FOUND\r\n\r\n";
+	send(fd, not_found_response, strlen(not_found_response), 0);	
+}
+
+
+char* extract_req_url(char* buffer) {
+	const char* delimiter = " ";
+	char* token;
+	strcpy(token, buffer);
+
+	// First token = request type GET, POST etc
+	token = strtok(token, delimiter);
+
+	// 2nd Token = Url
+	token = strtok(NULL, delimiter);
+
+	return token;
 }
