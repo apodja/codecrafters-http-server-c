@@ -11,7 +11,8 @@ void send_ok_response(int fd);
 void send_not_found_response(int fd);
 char* extract_req_url(char* buffer, size_t size);
 char* extract_query_str(char* url);
-void build_response(char* response_body, char* response_buffer);
+void build_response(char* response_body, char* response_sts, char* res_cont_type, char* response_buffer);
+char* extract_user_agent(char* request_buffer);
 
 #define BUFFER_LENGTH 1024
 
@@ -83,23 +84,30 @@ int main() {
 
     buffer[bytes] = '\0';
 	char* url = extract_req_url(buffer, bytes);
-
 	if (strcmp(url, "/") == 0)
 	{
 		send_ok_response(fd);
 	} else if (strncmp(url, "/echo", 5) == 0) {
 		char* res_body = extract_query_str(url);
-		build_response(res_body, response_buffer);
+		build_response(res_body,"200 OK","text/plain", response_buffer);
 		send(fd, response_buffer, strlen(response_buffer),0);
 		if (res_body != NULL)
 		{
 			free(res_body);
 		}
+	} else if(strcmp(url, "/user-agent") == 0){
+		char* user_agent = extract_user_agent(buffer);
+		if (user_agent != NULL)
+		{
+			build_response(user_agent, "200 OK", "text/plain", response_buffer);
+			send(fd, response_buffer, strlen(response_buffer),0);
+			free(user_agent);
+		}
+		
 	} else {
 		send_not_found_response(fd);
 	}
 
-	
 	free(url);
 	
 	close(server_fd);
@@ -123,11 +131,11 @@ char* extract_req_url(char* buffer, size_t size) {
 	char* token;
 	char* buffer_cpy = malloc(size);
 
-	strcpy(buffer_cpy, buffer_cpy);
+	strncpy(buffer_cpy, buffer, size);
 
 	// First token = request type GET, POST etc
-	token = strtok(buffer, delimiter);
-
+	token = strtok(buffer_cpy, delimiter);
+	
 	// 2nd Token = Url
 	token = strtok(NULL, delimiter);
 
@@ -135,7 +143,7 @@ char* extract_req_url(char* buffer, size_t size) {
 	strcpy(url, token);
 	free(buffer_cpy);
 
-	return token;
+	return url;
 }
 
 char* extract_query_str(char* url) {
@@ -160,11 +168,45 @@ char* extract_query_str(char* url) {
 	return NULL;
 }
 
-void build_response(char* response_body, char* response_buffer) {
+void build_response(char* response_body, char* response_sts, char* res_cont_type, char* response_buffer) {
 	int response = sprintf(response_buffer,
-		"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
+		"HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %d\r\n\r\n%s",
+		response_sts,
+		res_cont_type,
 		strlen(response_body),
 		response_body
 	);
 	response_buffer[response] = '\0';
 }
+
+char* extract_user_agent(char* request_buffer) {
+	char* req_buffer_cpy = malloc(strlen(request_buffer));
+	strcpy(req_buffer_cpy, request_buffer);
+	char* user_agent;
+	const char* needle = "User-Agent: ";
+	user_agent = strstr(req_buffer_cpy, needle);
+	if (user_agent == NULL)
+	{
+		free(req_buffer_cpy);
+		return NULL;
+	}
+
+	user_agent += strlen(needle);
+	printf("au: %s", user_agent);
+	user_agent = strtok(user_agent, "\r\n");
+	printf("ua: %s", user_agent);
+	
+	if (user_agent == NULL)
+	{
+		free(req_buffer_cpy);
+		return NULL;
+	}
+
+	char* ret_user_agent = malloc(strlen(user_agent) + 1);
+	strcpy(ret_user_agent, user_agent);
+	free(req_buffer_cpy);
+	
+
+	return ret_user_agent;
+}
+
