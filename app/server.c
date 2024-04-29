@@ -6,6 +6,7 @@
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
+#include <pthread.h>
 
 void send_ok_response(int fd);
 void send_not_found_response(int fd);
@@ -13,6 +14,7 @@ char* extract_req_url(char* buffer, size_t size);
 char* extract_query_str(char* url);
 void build_response(char* response_body, char* response_sts, char* res_cont_type, char* response_buffer);
 char* extract_user_agent(char* request_buffer);
+void *handle_request(void* fd);
 
 #define BUFFER_LENGTH 1024
 
@@ -59,38 +61,57 @@ int main() {
 	}
 	
 	printf("Waiting for a client to connect...\n");
-	client_addr_len = sizeof(client_addr);
 
-	int fd = accept(server_fd, (struct sockaddr *) &client_addr, &client_addr_len);
+	while (1)
+	{
+		
+		client_addr_len = sizeof(client_addr);
+		int client_fd = accept(server_fd, (struct sockaddr *) &client_addr, &client_addr_len);
 
-	if(fd == -1) {
-		printf("Could not accept connection from client.\n");
-		return 1;
+		if(client_fd == -1) {
+			printf("Could not accept connection from client.\n");
+			return 1;
+		}
+
+		printf("Client connected\n");
+
+		int* p_cli_fd = malloc(sizeof(int));
+		*p_cli_fd = client_fd;
+		pthread_t tid;
+
+		pthread_create(&tid, NULL, handle_request, (void*)p_cli_fd);
 	}
 	
+	close(server_fd);
 
-	printf("Client connected\n");
+	return 0;
+}
 
+void *handle_request(void* fd) {
+
+	int client_fd = *(int*)fd;
+	free(fd);
+	
 	char buffer[BUFFER_LENGTH];
 	char response_buffer[BUFFER_LENGTH];
 
-	size_t bytes = recv(fd, buffer, BUFFER_LENGTH, 0);
+	size_t bytes = recv(client_fd, buffer, BUFFER_LENGTH, 0);
 
 	if (bytes == -1)
 	{
 		printf("Recieving bytes error.\n");
-		return 1;
+		return NULL;
 	}
 
     buffer[bytes] = '\0';
 	char* url = extract_req_url(buffer, bytes);
 	if (strcmp(url, "/") == 0)
 	{
-		send_ok_response(fd);
+		send_ok_response(client_fd);
 	} else if (strncmp(url, "/echo", 5) == 0) {
 		char* res_body = extract_query_str(url);
 		build_response(res_body,"200 OK","text/plain", response_buffer);
-		send(fd, response_buffer, strlen(response_buffer),0);
+		send(client_fd, response_buffer, strlen(response_buffer),0);
 		if (res_body != NULL)
 		{
 			free(res_body);
@@ -100,20 +121,17 @@ int main() {
 		if (user_agent != NULL)
 		{
 			build_response(user_agent, "200 OK", "text/plain", response_buffer);
-			send(fd, response_buffer, strlen(response_buffer),0);
+			send(client_fd, response_buffer, strlen(response_buffer),0);
 			free(user_agent);
 		}
 		
 	} else {
-		send_not_found_response(fd);
+		send_not_found_response(client_fd);
 	}
 
 	free(url);
-	
-	close(server_fd);
-
-	return 0;
 }
+	
 
 void send_ok_response(int fd) {
 	const char* ok_response = "HTTP/1.1 200 OK\r\n\r\n";
@@ -192,9 +210,7 @@ char* extract_user_agent(char* request_buffer) {
 	}
 
 	user_agent += strlen(needle);
-	printf("au: %s", user_agent);
 	user_agent = strtok(user_agent, "\r\n");
-	printf("ua: %s", user_agent);
 	
 	if (user_agent == NULL)
 	{
