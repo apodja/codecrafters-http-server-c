@@ -15,10 +15,17 @@ char* extract_query_str(char* url);
 void build_response(char* response_body, char* response_sts, char* res_cont_type, char* response_buffer);
 char* extract_user_agent(char* request_buffer);
 void *handle_request(void* fd);
+char* handle_get_file(char* filepath);
 
 #define BUFFER_LENGTH 1024
 
-int main() {
+struct arg_s {
+	int* fd;
+	char* dir;
+};
+
+
+int main(int argc, char* argv[]) {
 	// Disable output buffering
 	setbuf(stdout, NULL);
 
@@ -76,10 +83,15 @@ int main() {
 		printf("Client connected\n");
 
 		int* p_cli_fd = malloc(sizeof(int));
+		char* dir = malloc(strlen(argv[2]) + 1);
+		strcpy(dir, argv[2]);
 		*p_cli_fd = client_fd;
 		pthread_t tid;
-
-		pthread_create(&tid, NULL, handle_request, (void*)p_cli_fd);
+		struct arg_s *arg_struct = malloc(sizeof(struct arg_s));
+		arg_struct->fd = p_cli_fd;
+		arg_struct->dir = dir;
+		
+		pthread_create(&tid, NULL, &handle_request, (void*)arg_struct);
 	}
 	
 	close(server_fd);
@@ -87,11 +99,12 @@ int main() {
 	return 0;
 }
 
-void *handle_request(void* fd) {
-
-	int client_fd = *(int*)fd;
-	free(fd);
-	
+void *handle_request(void* args) {
+	struct arg_s* arg_s = args;
+	int client_fd = *(arg_s->fd);
+	free(arg_s->fd);
+	char* dir = arg_s->dir;
+		
 	char buffer[BUFFER_LENGTH];
 	char response_buffer[BUFFER_LENGTH];
 
@@ -105,8 +118,8 @@ void *handle_request(void* fd) {
 
     buffer[bytes] = '\0';
 	char* url = extract_req_url(buffer, bytes);
-	if (strcmp(url, "/") == 0)
-	{
+	printf("%s\n", url);
+	if (strcmp(url, "/") == 0) {
 		send_ok_response(client_fd);
 	} else if (strncmp(url, "/echo", 5) == 0) {
 		char* res_body = extract_query_str(url);
@@ -121,15 +134,34 @@ void *handle_request(void* fd) {
 		if (user_agent != NULL)
 		{
 			build_response(user_agent, "200 OK", "text/plain", response_buffer);
-			send(client_fd, response_buffer, strlen(response_buffer),0);
+			send(client_fd, response_buffer, strlen(response_buffer), 0);
 			free(user_agent);
 		}
 		
-	} else {
-		send_not_found_response(client_fd);
-	}
-
+	} else if (strcmp(url, "/files")){
+		char* filename = extract_query_str(url);
+		
+		if(filename != NULL) {
+			char* full_fpath = malloc(strlen(filename) + strlen(dir) + 1);
+			
+			strcpy(full_fpath, dir);
+			free(dir);
+			free(arg_s);
+			strcat(full_fpath, filename);
+			char* content = handle_get_file(full_fpath);
+			if (content != NULL) {
+				build_response(content, "200 OK", "application/octet-stream", response_buffer);
+				send(client_fd, response_buffer, strlen(response_buffer), 0);
+				free(content);
+			} else {
+				build_response("", "404 Not Found", "application/octet-stream", response_buffer);
+				send(client_fd, response_buffer, strlen(response_buffer), 0);
+			}
+		}
+	} 
 	free(url);
+	send_not_found_response(client_fd);
+	
 }
 	
 
@@ -139,7 +171,7 @@ void send_ok_response(int fd) {
 }
 
 void send_not_found_response(int fd) {
-	const char* not_found_response = "HTTP/1.1 404 NOT FOUND\r\n\r\n";
+	const char* not_found_response = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nContent-Type: text/plain\r\n\r\n";
 	send(fd, not_found_response, strlen(not_found_response), 0);	
 }
 
@@ -194,7 +226,6 @@ void build_response(char* response_body, char* response_sts, char* res_cont_type
 		strlen(response_body),
 		response_body
 	);
-	response_buffer[response] = '\0';
 }
 
 char* extract_user_agent(char* request_buffer) {
@@ -224,5 +255,29 @@ char* extract_user_agent(char* request_buffer) {
 	
 
 	return ret_user_agent;
+}
+
+char* handle_get_file(char* filepath) {
+	FILE* fp;
+	fp = fopen(filepath, "r");
+	if(fp == NULL) {
+		printf("Could not open file: %s.\n", filepath);
+		free(filepath);
+		return NULL;
+	}
+
+	fseek(fp, 0, SEEK_END);
+    long f_length = ftell(fp);
+    fseek(fp, 0L, SEEK_SET);
+
+	char* contents = malloc(f_length + 1);
+
+	fread(contents, 1, f_length, fp);
+	contents[f_length] = '\0';
+	fclose(fp);
+
+	free(filepath);
+
+	return contents;
 }
 
