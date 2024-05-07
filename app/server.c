@@ -7,15 +7,8 @@
 #include <errno.h>
 #include <unistd.h>
 #include <pthread.h>
-
-void send_ok_response(int fd);
-void send_not_found_response(int fd);
-char* extract_req_url(char* buffer, size_t size);
-char* extract_query_str(char* url);
-void build_response(char* response_body, char* response_sts, char* res_cont_type, char* response_buffer);
-char* extract_user_agent(char* request_buffer);
-void *handle_request(void* fd);
-char* handle_get_file(char* filepath);
+#include <fcntl.h>
+#include <sys/stat.h>
 
 #define BUFFER_LENGTH 1024
 
@@ -24,6 +17,42 @@ struct arg_s {
 	char* dir;
 };
 
+typedef enum  {
+	GET,
+	POST
+}RequestType;
+
+typedef struct {
+	char* url;
+	char* query_string;
+} Url;
+
+ struct Request{
+	RequestType type;
+	Url* url;
+	char* user_agent;
+	char* body;
+};
+
+typedef struct {
+	char* status;
+	char* content_type;
+	char* body;
+} Response;
+
+
+void send_ok_response(int fd);
+void send_not_found_response(int fd);
+void send_created_response(int fd);
+void build_response(char* response_body, char* response_sts, char* res_cont_type, char* response_buffer);
+char* extract_user_agent(char* request_buffer);
+void *handle_request(void* fd);
+char* handle_get_file(char* filepath);
+void free_request(struct Request* request);
+struct Request* parse_request(char* buffer);
+struct Request* init_request();
+Url* parse_url(char* line, RequestType type);
+int handle_post_file(char* filepath, char* content);
 
 int main(int argc, char* argv[]) {
 	// Disable output buffering
@@ -99,6 +128,130 @@ int main(int argc, char* argv[]) {
 	return 0;
 }
 
+struct Request* init_request() {
+	struct Request* request = malloc(sizeof(struct Request));
+	request->body = NULL;
+	request->type = GET; // Default
+	request->user_agent = NULL;
+
+	return request;
+}
+
+struct Request* parse_request(char* buffer) {
+	struct Request* request = init_request();
+	const char* delimiter = "\r\n";
+	char* buff_cpy = malloc(strlen(buffer) + 1);
+	strcpy(buff_cpy, buffer);
+	char* line;
+	line = strtok(buff_cpy, delimiter);
+	if (strncmp(line, "GET", 3) == 0) {
+		request->type = GET;
+	} else if(strncmp(line, "POST", 4) == 0) {
+		request->type = POST;
+	}
+
+	Url* url = parse_url(line, request->type);
+	request->url = url;
+		
+	// Hostname line
+	line = strtok(NULL, delimiter);
+	if (line == NULL)
+	{
+		printf("No hostname provided in the request.\n");
+		return request;
+	}
+
+	// User-Agent Line
+	line = strtok(NULL, delimiter);
+	if (line == NULL)
+	{
+		printf("No User-Agent provided in the request.\n");
+		return request;
+	}
+	
+	char* user_agent = extract_user_agent(line);
+	request->user_agent = user_agent;
+
+	char* last_line;
+	while (line != NULL) {
+		last_line = line;
+		line = strtok(NULL, delimiter);
+	}
+
+	if (strcmp(last_line, "Accept-Encoding: gzip" ) != 0)
+	{
+		request->body = malloc(strlen(last_line) + 1);
+		strcpy(request->body, last_line);
+	}
+	free(buff_cpy);
+	
+	return request;
+}
+
+Url* parse_url(char* line, RequestType type) {
+	Url* url = malloc(sizeof(Url));
+
+	char* line_cpy = malloc(strlen(line) + 1);
+	strcpy(line_cpy, line);
+	char* start;
+	char* end = " HTTP/1.1";
+
+	if(type == GET) {
+		start = "GET "; 
+	} else {
+		start = "POST ";
+	}
+	
+	char* left = strstr(line_cpy, start);
+	
+	if (left == NULL)
+	{
+		free(url);
+		free(line_cpy);
+		return NULL;
+	}
+	left += strlen(start);
+	
+	char* right =  strstr(left, end);
+
+	size_t length = right - left;
+
+	char* url_str = malloc(length + 1);
+
+	strncpy(url_str, left, length);
+	url_str[length] = '\0';
+	free(line_cpy);
+	char* lastSlash = strrchr(url_str, '/');
+	if(strcmp(lastSlash, url_str) == 0) {
+		// No query string
+		url->url = malloc(strlen(url_str) + 1);
+		strcpy(url->url, url_str);
+		url->query_string = NULL;
+
+	} else {
+		int index_last_slash = lastSlash - url_str;
+		url_str[index_last_slash] = '\0';
+		url->url = malloc(strlen(url_str) + 1);
+		url->query_string = malloc(strlen(lastSlash + 1) + 1);
+		strcpy(url->url, url_str);
+		strcpy(url->query_string, lastSlash + 1);
+	}
+
+	free(url_str);
+
+	return url;
+}
+
+void free_request(struct Request* request) {
+	free(request->url->url);
+	if(request->url->query_string != NULL)
+		free(request->url->query_string);
+	free(request->url);
+	free(request->user_agent);
+	if(request->body != NULL)
+		free(request->body);
+}
+
 void *handle_request(void* args) {
 	struct arg_s* arg_s = args;
 	int client_fd = *(arg_s->fd);
@@ -116,52 +269,53 @@ void *handle_request(void* args) {
 		return NULL;
 	}
 
+
     buffer[bytes] = '\0';
-	char* url = extract_req_url(buffer, bytes);
-	printf("%s\n", url);
-	if (strcmp(url, "/") == 0) {
+	struct Request* request = parse_request(buffer);
+	printf("%s\n",request->url->url);
+	if (strcmp(request->url->url, "/") == 0) {
 		send_ok_response(client_fd);
-	} else if (strncmp(url, "/echo", 5) == 0) {
-		char* res_body = extract_query_str(url);
-		build_response(res_body,"200 OK","text/plain", response_buffer);
+	} else if (strncmp(request->url->url, "/echo", 5) == 0) {
+		build_response(request->url->query_string,"200 OK","text/plain", response_buffer);
 		send(client_fd, response_buffer, strlen(response_buffer),0);
-		if (res_body != NULL)
-		{
-			free(res_body);
-		}
-	} else if(strcmp(url, "/user-agent") == 0){
-		char* user_agent = extract_user_agent(buffer);
-		if (user_agent != NULL)
-		{
-			build_response(user_agent, "200 OK", "text/plain", response_buffer);
-			send(client_fd, response_buffer, strlen(response_buffer), 0);
-			free(user_agent);
-		}
+	} else if(strcmp(request->url->url, "/user-agent") == 0){
+		build_response(request->user_agent, "200 OK", "text/plain", response_buffer);
+		send(client_fd, response_buffer, strlen(response_buffer), 0);
+	} else if (strncmp(request->url->url, "/files", 6) == 0){
+
+		char* full_fpath = malloc(strlen(request->url->query_string) + strlen(dir) + 1);
 		
-	} else if (strcmp(url, "/files")){
-		char* filename = extract_query_str(url);
-		
-		if(filename != NULL) {
-			char* full_fpath = malloc(strlen(filename) + strlen(dir) + 1);
-			
-			strcpy(full_fpath, dir);
-			free(dir);
-			free(arg_s);
-			strcat(full_fpath, filename);
+		strcpy(full_fpath, dir);
+
+		free(dir);
+		free(arg_s);
+		strcat(full_fpath, request->url->query_string);
+		if (request->type == GET) {
 			char* content = handle_get_file(full_fpath);
 			if (content != NULL) {
 				build_response(content, "200 OK", "application/octet-stream", response_buffer);
 				send(client_fd, response_buffer, strlen(response_buffer), 0);
 				free(content);
 			} else {
-				build_response("", "404 Not Found", "application/octet-stream", response_buffer);
-				send(client_fd, response_buffer, strlen(response_buffer), 0);
+				send_not_found_response(client_fd);
 			}
+		} else if (request->type == POST) {
+			int post = handle_post_file(full_fpath, request->body);
+			
+			if (post)
+			{
+				send_created_response(client_fd);
+			}
+			
+		} else {
+			printf("Not implemented\n");
 		}
-	} 
-	free(url);
-	send_not_found_response(client_fd);
-	
+		free(full_fpath);
+		
+	} else {
+		send_not_found_response(client_fd);
+	}
+	free_request(request);
 }
 	
 
@@ -175,47 +329,9 @@ void send_not_found_response(int fd) {
 	send(fd, not_found_response, strlen(not_found_response), 0);	
 }
 
-
-char* extract_req_url(char* buffer, size_t size) {
-	const char* delimiter = " ";
-	char* token;
-	char* buffer_cpy = malloc(size);
-
-	strncpy(buffer_cpy, buffer, size);
-
-	// First token = request type GET, POST etc
-	token = strtok(buffer_cpy, delimiter);
-	
-	// 2nd Token = Url
-	token = strtok(NULL, delimiter);
-
-	char* url = malloc(strlen(token) + 1);
-	strcpy(url, token);
-	free(buffer_cpy);
-
-	return url;
-}
-
-char* extract_query_str(char* url) {
-	char* query_str_first = strchr(url, '/');
-	char* query_str_sec;
-
-	if (query_str_first != NULL) {
-		query_str_sec = strchr(query_str_first + 1, '/');
-
-		if (query_str_sec != NULL)
-		{
-			char* query_str = malloc(strlen(query_str_sec + 1));
-			if (query_str != NULL)
-			{
-				strcpy(query_str, query_str_sec + 1);
-				return query_str;
-			}
-			
-		}
-		
-	}
-	return NULL;
+void send_created_response(int fd) {
+	const char* created_response = "HTTP/1.1 201 Created\r\nContent-Length: 0\r\nContent-Type: application/octet-stream\r\n\r\n";
+	send(fd, created_response, strlen(created_response), 0);	
 }
 
 void build_response(char* response_body, char* response_sts, char* res_cont_type, char* response_buffer) {
@@ -223,36 +339,34 @@ void build_response(char* response_body, char* response_sts, char* res_cont_type
 		"HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %d\r\n\r\n%s",
 		response_sts,
 		res_cont_type,
-		strlen(response_body),
+		(int)strlen(response_body),
 		response_body
 	);
 }
 
-char* extract_user_agent(char* request_buffer) {
-	char* req_buffer_cpy = malloc(strlen(request_buffer));
-	strcpy(req_buffer_cpy, request_buffer);
+char* extract_user_agent(char* line) {
+	char* line_cpy = malloc(strlen(line));
+	strcpy(line_cpy, line);
 	char* user_agent;
 	const char* needle = "User-Agent: ";
-	user_agent = strstr(req_buffer_cpy, needle);
+	user_agent = strstr(line_cpy, needle);
 	if (user_agent == NULL)
 	{
-		free(req_buffer_cpy);
+		free(line_cpy);
 		return NULL;
 	}
 
 	user_agent += strlen(needle);
-	user_agent = strtok(user_agent, "\r\n");
 	
 	if (user_agent == NULL)
 	{
-		free(req_buffer_cpy);
+		free(line_cpy);
 		return NULL;
 	}
 
 	char* ret_user_agent = malloc(strlen(user_agent) + 1);
 	strcpy(ret_user_agent, user_agent);
-	free(req_buffer_cpy);
-	
+	free(line_cpy);
 
 	return ret_user_agent;
 }
@@ -276,8 +390,21 @@ char* handle_get_file(char* filepath) {
 	contents[f_length] = '\0';
 	fclose(fp);
 
-	free(filepath);
-
 	return contents;
+}
+
+int handle_post_file(char* filepath, char* content) {
+    FILE* fp = fopen(filepath, "w+");
+	if (fp == NULL)
+	{
+		perror("fopen");
+		fclose(fp);
+		return 0;
+	}
+
+	fwrite(content, 1, strlen(content), fp);
+	fclose(fp);
+
+	return 1;
 }
 
